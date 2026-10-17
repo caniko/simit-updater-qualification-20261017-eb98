@@ -1,0 +1,61 @@
+name: Qualify live packaged updater
+
+on:
+  push:
+    branches: [qualification-harness]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        max-jobs = 1
+        cores = 2
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Checkout qualification harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: harness
+      - name: Checkout exact production source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: caniko/simit
+          ref: 30358c23a54f8cea463883d16823ef62bb769313
+          persist-credentials: false
+          path: simit-source
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          extra_nix_config: |
+            substituters = https://attic.candee.baby/canix https://cache.nixos.org
+            trusted-public-keys = canix:lPzPzKrmYqW5Rxa5r0uQWvCqD3S5nx0h2eCy7XD5JM8= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+      - name: Build and identify exact packaged binary
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/live-evidence"
+          git -C simit-source rev-parse HEAD > "$RUNNER_TEMP/live-evidence/revision"
+          git -C simit-source rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/live-evidence/tree"
+          nix build --no-link --no-update-lock-file --json ./simit-source#default > "$RUNNER_TEMP/live-evidence/result.json"
+      - name: Qualify hosted namespaces
+        run: nix develop ./simit-source#test -c bash simit-source/scripts/qualify-updater-sandbox-host.sh
+      - name: Execute real maintenance qualification landing and adoption
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIXTURE_SSH_KEY: ${{ secrets.FIXTURE_SSH_KEY }}
+        run: nix develop ./simit-source#test -c python3 harness/lifecycle.py "$RUNNER_TEMP/live-evidence"
+      - name: Retain lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-updater-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 31
+          if-no-files-found: error
+          path: ${{ runner.temp }}/live-evidence/**
