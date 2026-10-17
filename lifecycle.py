@@ -88,11 +88,19 @@ with tempfile.TemporaryDirectory(prefix="simit-live-authority-") as temporary:
     save(evidence / "policy.json", policy)
     save(evidence / "inventory.json", json.loads(inventory.read_text()))
     command = [str(binary), "projects", "update", "--config", str(config), "--profile", "live", "--json"]
+
+    def refresh_inventory(phase):
+        observation = json.loads(inventory.read_text())
+        observation["observedAt"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        save(inventory, observation)
+        save(evidence / f"inventory-{phase}.json", observation)
+
     try:
         preview = json.loads(run(*command, "--dry-run", "--wait-seconds", "1800", env=env))
         save(evidence / "preview.json", preview)
         assert len(preview) == 1 and preview[0]["phase"] == "preview", preview
         assert ".github/workflows/ci.yaml" in preview[0]["managed"]
+        refresh_inventory("push")
         pushed = subprocess.run([*command, "--push", "--wait-seconds", "1800"], text=True, capture_output=True, env=env)
         (evidence / "push.stdout").write_text(pushed.stdout)
         (evidence / "push.stderr").write_text(pushed.stderr)
@@ -104,6 +112,7 @@ with tempfile.TemporaryDirectory(prefix="simit-live-authority-") as temporary:
         assert run("git", "ls-remote", "origin", "refs/heads/consumer", cwd=checkout, env=env).split()[0] == receipt["candidate"]
         assert run("git", "ls-remote", "origin", "refs/heads/" + receipt["branch"], cwd=checkout, env=env).split()[0] == receipt["candidate"]
         assert run("git", "show", "-s", "--format=%P", receipt["candidate"], cwd=checkout, env=env) == receipt["source"]
+        refresh_inventory("unchanged")
         unchanged = json.loads(run(*command, "--push", "--wait-seconds", "1800", env=env))
         save(evidence / "unchanged.json", unchanged)
         assert unchanged[0]["phase"] == "unchanged" and unchanged[0]["candidate"] == receipt["candidate"]
