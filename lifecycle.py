@@ -57,6 +57,9 @@ with tempfile.TemporaryDirectory(prefix="simit-live-authority-") as temporary:
     )
     env = dict(os.environ, GIT_CONFIG_GLOBAL=str(gitconfig), GIT_CONFIG_NOSYSTEM="1",
                GIT_SSH_COMMAND=f"ssh -i {key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts}")
+    tool_logs = authority / "tool-logs"
+    tool_logs.mkdir(mode=0o700)
+    env["TMPDIR"] = str(tool_logs)
     root = Path(os.environ["RUNNER_TEMP"]) / "live-updater-state"
     projects = Path(os.environ["RUNNER_TEMP"]) / "live-projects"
     projects.mkdir()
@@ -121,6 +124,12 @@ with tempfile.TemporaryDirectory(prefix="simit-live-authority-") as temporary:
         assert status[0]["phase"] == "unchanged"
         print("PASS: genuine maintenance push -> original GitHub Actions -> same-commit landing -> adoption -> baseline -> unchanged")
     finally:
+        for source in tool_logs.glob(".tmp*"):
+            if source.is_file():
+                destination = evidence / "diagnostics" / source.name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, destination)
+                print(source.read_text(errors="replace"), file=sys.stderr)
         for source in root.glob("profile-*/repo-*/*"):
             if source.is_file() and (source.suffix == ".json" or source.name == "commit.txt"):
                 destination = evidence / source.parent.parent.name / source.parent.name / source.name
